@@ -1,0 +1,12 @@
+node_modules/
+.DS_Store
+plugin.zip
+*.log
+.env
+.env.*
+plugin-data/
+storage.json
+settings.json
+.granted.json
+.origin.json
+__pycache__/

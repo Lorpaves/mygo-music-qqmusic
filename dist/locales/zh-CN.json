@@ -1,0 +1,18 @@
+{
+  "QQ Music": "QQ 音乐",
+  "Featured Playlists": "精选歌单",
+  "Charts": "排行榜",
+  "Personal FM": "私人电台",
+  "Recommended for You": "为你推荐",
+  "Login method": "扫码登录方式",
+  "WeChat": "微信",
+  "Leave empty for WeChat. Enter QQ to scan with the QQ app.": "留空即可用微信扫码；如需手机 QQ 扫码，输入 QQ。",
+  "Preparing WeChat QR code…": "正在准备微信登录二维码…",
+  "Preparing QQ QR code…": "正在准备 QQ 登录二维码…",
+  "Login method must be QQ or WeChat": "登录方式请填写 QQ 或微信，也可以留空使用微信。",
+  "Sign in to QQ Music": "请先扫码登录 QQ 音乐",
+  "This sign-in attempt was canceled": "本次登录已取消，请重新扫码。",
+  "WeChat QR expired or canceled": "微信二维码已过期或登录已取消，请重试。",
+  "WeChat QR expired": "微信二维码已过期，请重试获取新二维码。",
+  "QQ Music did not provide a playable stream": "QQ 音乐未提供可播放的音源，请确认账号权益及歌曲所在地区的版权。"
+}

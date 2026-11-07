@@ -1,0 +1,29 @@
+{
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node --test test.mjs auth.test.mjs auth-qq.test.mjs auth-wechat.test.mjs qr.test.mjs browse.test.mjs library.test.mjs qrc.test.mjs compat.test.mjs",
+    "check": "node --check index.js && node --check dist/index.js",
+    "test:live": "node live.mjs",
+    "test:signed-in": "node live.mjs --signed-in"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "jpeg-js": "^0.4.4",
+    "jsqr": "^1.4.0",
+    "pako": "^3.0.3",
+    "qrcode": "^1.5.4"
+  },
+  "name": "mygo-qqmusic-wechat",
+  "version": "0.3.2",
+  "license": "AGPL-3.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Lorpaves/mygo-music-qqmusic.git"
+  },
+  "homepage": "https://github.com/Lorpaves/mygo-music-qqmusic#readme",
+  "bugs": {
+    "url": "https://github.com/Lorpaves/mygo-music-qqmusic/issues"
+  }
+}
