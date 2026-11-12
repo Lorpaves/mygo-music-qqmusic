@@ -1,6 +1,6 @@
 # QQ 音乐 · 微信扫码版 for MyGo Music
 
-当前版本 **0.3.2**，需要 MyGo Music **0.1.20+**。默认使用微信扫码登录，直接连接腾讯服务；无需 API 服务、Cookie 手动配置、Node 后台或 ffmpeg。
+当前版本 **0.3.3**，需要 MyGo Music **0.1.20+**。默认使用微信扫码登录，直接连接腾讯服务；无需 API 服务、Cookie 手动配置、Node 后台或 ffmpeg。
 
 基于 [Amamiya23/mygo-music-qq-plugin](https://github.com/Amamiya23/mygo-music-qq-plugin) 的 0.3.0 修改。接口兼容处理也参考了 [dddaniel1/mygo-plugin-qqmusic](https://github.com/dddaniel1/mygo-plugin-qqmusic) 和 Lyrics / QQMusicClient 项目。完整来源与许可证见 [NOTICE.md](NOTICE.md)。
 

@@ -101,6 +101,23 @@ test('empty login setting completes WeChat flow and preserves a large music ID',
   assert.ok(prompts.some(p => p.qr?.startsWith('https://open.weixin.qq.com/')));
 });
 
+test('device limit rejection surfaces an actionable login error', async () => {
+  const png = await QRCode.toBuffer('https://open.weixin.qq.com/connect/confirm?uuid=fixture');
+  respond = (address, options) => {
+    if (address.includes('/ptqrshow')) return new Response('entropy', { headers: { 'set-cookie': `qrsig=${'a'.repeat(80)}; Path=/; Secure` } });
+    if (address.includes('api.tencentmusic.com')) return Response.json({ data: { data: { q16: 'qimei16', q36: 'qimei36' } } });
+    if (address.includes('/connect/qrcode/')) return new Response(png);
+    if (address.includes('/connect/l/qrconnect')) return new Response("window.wx_errcode=405;window.wx_code='fixture-code';");
+    if (address.includes('/connect/qrconnect')) return new Response('<img src="/connect/qrcode/fixture">');
+    const body = JSON.parse(options.body);
+    if (body.req_0?.method === 'GetSession') return rpcResponse({ session: { uid: 'device', sid: 'session' } });
+    if (body.req?.method === 'Login') return Response.json({ code: 0, req: { code: 20279, data: { musicid: 12345, str_musicid: '12345', loginType: 1, errtip: 'device limit reached' } } });
+    throw new Error(`unexpected request ${address}`);
+  };
+  await assert.rejects(plugin.signIn(), error => error.qqGlobalCode === 0 && error.qqCode === 20279 && error.qqLoginStage === 'wechat-token-exchange' && error.qqTip === 'device limit reached' && /device limit reached/.test(error.message) && /0\/20279/.test(error.message));
+  assert.equal(storage.has('qqmusic.auth.v1'), false);
+});
+
 test('signing out during final profile validation prevents a late login', async () => {
   await loginFixture(() => plugin.signOut());
   await assert.rejects(plugin.signIn(), /canceled/);

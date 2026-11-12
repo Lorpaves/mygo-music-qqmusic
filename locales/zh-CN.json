@@ -14,5 +14,7 @@
   "This sign-in attempt was canceled": "本次登录已取消，请重新扫码。",
   "WeChat QR expired or canceled": "微信二维码已过期或登录已取消，请重试。",
   "WeChat QR expired": "微信二维码已过期，请重试获取新二维码。",
+  "QQ Music rejected the WeChat login ({global}/{code}/{subcode})": "QQ 音乐拒绝了微信登录（业务码 {global}/{code}/{subcode}）。",
+  "QQ Music device limit reached ({global}/{code})": "QQ 音乐登录设备数超出限制（业务码 {global}/{code}），请先在 QQ 音乐客户端管理设备并移除不常用设备后重试。",
   "QQ Music did not provide a playable stream": "QQ 音乐未提供可播放的音源，请确认账号权益及歌曲所在地区的版权。"
 }
