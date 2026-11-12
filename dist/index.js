@@ -11415,8 +11415,19 @@ function object(value) {
   }
 }
 function checked(body, name) {
-  if (!body || body.code !== 0 || !body[name] || body[name].code !== 0 || (body[name].subcode || 0) !== 0 || !body[name].data) throw new Error("QQ Music rejected or malformed login response");
-  return body[name].data;
+  if (!body || typeof body.code !== "number" || !body[name] || typeof body[name].code !== "number") throw new Error("QQ Music returned a malformed login response");
+  const result = body[name], subcode = result.subcode ?? 0;
+  if (body.code !== 0 || result.code !== 0 || subcode !== 0) {
+    const error = new Error("QQ Music rejected the WeChat login");
+    error.qqGlobalCode = body.code;
+    error.qqCode = result.code;
+    if (subcode !== 0) error.qqSubcode = subcode;
+    error.qqLoginStage = "wechat-token-exchange";
+    if (typeof result.data?.errtip === "string" && result.data.errtip) error.qqTip = result.data.errtip;
+    throw error;
+  }
+  if (!result.data || typeof result.data !== "object") throw new Error("QQ Music returned no login credential");
+  return result.data;
 }
 function session2(data, d) {
   const id = data.str_musicid || data.musicid, type = data.loginType || 1;
@@ -14622,7 +14633,11 @@ async function signIn() {
     host.storage.set("qqmusic.profile.v1", profile);
     return profile;
   } catch (error) {
-    error.message = host.t(error.message);
+    if (error.qqCode === 20279) {
+      const message = host.t("QQ Music device limit reached ({global}/{code})").replace("{global}", error.qqGlobalCode).replace("{code}", error.qqCode);
+      error.message = error.qqTip ? `${message} ${error.qqTip}` : message;
+    } else if (error.qqLoginStage === "wechat-token-exchange") error.message = host.t("QQ Music rejected the WeChat login ({global}/{code}/{subcode})").replace("{global}", error.qqGlobalCode).replace("{code}", error.qqCode).replace("{subcode}", error.qqSubcode || 0);
+    else error.message = host.t(error.message);
     throw error;
   }
 }
