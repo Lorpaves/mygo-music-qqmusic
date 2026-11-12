@@ -11,6 +11,7 @@
   "Preparing QQ QR code…": "正在准备 QQ 登录二维码…",
   "Login method must be QQ or WeChat": "登录方式请填写 QQ 或微信，也可以留空使用微信。",
   "Sign in to QQ Music": "请先扫码登录 QQ 音乐",
+  "The QQ Music account changed; please try again": "QQ 音乐账号已切换，请重试。",
   "This sign-in attempt was canceled": "本次登录已取消，请重新扫码。",
   "WeChat QR expired or canceled": "微信二维码已过期或登录已取消，请重试。",
   "WeChat QR expired": "微信二维码已过期，请重试获取新二维码。",

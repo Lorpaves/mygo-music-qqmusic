@@ -115,3 +115,9 @@ test("refreshQQSession refuses to run without a refresh token and reports reject
   await assert.rejects(() => refreshQQSession({ musicid: "12345", musickey: "Q_old", loginType: 2,
     refresh_token: "spent" }, fetch), /QQ refresh rejected: 0\/1000/);
 });
+
+// A renewal may rotate credentials, but it must not switch the authenticated account.
+test('refreshQQSession rejects a response for another account', async () => {
+  const fetch = async () => Response.json({ code: 0, req: { code: 0, data: { musicid: '99999', musickey: 'fixture', loginType: 2 } } });
+  await assert.rejects(refreshQQSession({ musicid: '12345', musickey: 'old-fixture', refresh_token: 'fixture' }, fetch), /account mismatch/);
+});

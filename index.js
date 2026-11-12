@@ -298,7 +298,7 @@ export { qqReadSession, qqAuthContext, qqAuthRpc };
 const qqRefreshMargin = 24 * 60 * 60;
 const qqRefreshCooldown = 10 * 60 * 1000;
 let qqRefreshing = null;
-let qqRefreshRetryAt = 0;
+let qqRefreshRetry = null;
 
 function qqSessionExpiresAt(session) {
   const created = Number(session?.musickeyCreateTime) || 0;
@@ -306,22 +306,41 @@ function qqSessionExpiresAt(session) {
   return created && ttl ? created + ttl : 0;
 }
 
+function qqSameSession(a, b) {
+  return !!a && !!b && a.musicid === b.musicid && a.loginType === b.loginType && a.musickey === b.musickey;
+}
+
+function qqCurrentSession(session, generation) {
+  return generation === signInGeneration && qqSameSession(session, qqReadSession());
+}
+
+function qqAccountChanged() {
+  return qqAuthError("The QQ Music account changed; please try again");
+}
+
 async function qqKeepAlive() {
   const session = qqReadSession();
+  const generation = signInGeneration;
   const expiresAt = qqSessionExpiresAt(session);
   if (!session || session.loginType !== 2 || !expiresAt || Date.now() / 1000 < expiresAt - qqRefreshMargin) return session;
   if (!session.refresh_token && !session.refresh_key) return session;
-  if (Date.now() < qqRefreshRetryAt) return session;
-  qqRefreshing = qqRefreshing || refreshQQSession(session, fetch).then(next => {
+  if (qqRefreshRetry?.generation === generation && qqSameSession(qqRefreshRetry.session, session) && Date.now() < qqRefreshRetry.at) return session;
+  if (qqRefreshing?.generation === generation && qqSameSession(qqRefreshing.session, session)) return qqRefreshing.promise;
+  const job = { session, generation, promise: null };
+  qqRefreshing = job;
+  job.promise = refreshQQSession(session, fetch).then(next => {
+    if (!qqCurrentSession(session, generation)) throw qqAccountChanged();
     host.storage.set(qqAuthStorageKey, next);
-    qqRefreshRetryAt = 0;
+    qqRefreshRetry = null;
     return next;
   }).catch(error => {
-    qqRefreshRetryAt = Date.now() + qqRefreshCooldown;
-    console.warn(`QQ Music refresh: ${error.message}`);
+    if (!qqCurrentSession(session, generation)) throw qqAccountChanged();
+    qqRefreshRetry = { session, generation, at: Date.now() + qqRefreshCooldown };
+    // A transport error can include request details; never log credentials.
+    console.warn("QQ Music refresh failed; retrying later");
     return session;
-  }).finally(() => { qqRefreshing = null; });
-  return qqRefreshing;
+  }).finally(() => { if (qqRefreshing === job) qqRefreshing = null; });
+  return job.promise;
 }
 
 function qqAuthContext(session = qqReadSession()) {
@@ -365,10 +384,13 @@ async function qqAccountFor(session) {
 }
 
 export async function qqFinishSignIn(value) {
+  const generation = ++signInGeneration;
   const session = qqSession(value);
   if (!session) throw qqAuthError("QQ Music login returned an invalid credential");
   const profile = await qqAccountFor(session);
+  if (generation !== signInGeneration) throw qqAccountChanged();
   host.storage.set(qqAuthStorageKey, session);
+  host.storage.set('qqmusic.profile.v1', profile);
   return profile;
 }
 
@@ -401,29 +423,39 @@ export async function signIn() {
 }
 
 export async function account() {
-  let session = await qqKeepAlive();
+  const generation = signInGeneration;
+  const session = await qqKeepAlive();
   if (!session) return null;
+  if (!qqCurrentSession(session, generation)) throw qqAccountChanged();
   try {
-    return await qqAccountFor(session);
+    const profile = await qqAccountFor(session);
+    if (!qqCurrentSession(session, generation)) throw qqAccountChanged();
+    return profile;
   } catch (error) {
+    if (!qqCurrentSession(session, generation)) throw qqAccountChanged();
     if (error.qqGlobalCode === 0 && [1000, 104400, 104401].includes(error.qqCode)) {
       if (session.loginType === 1 && (session.refresh_key || session.refresh_token) && session.device) {
         try {
-          session = await refreshWechatSession(session, fetch);
-          const profile = await qqAccountFor(session);
-          host.storage.set(qqAuthStorageKey, session);
+          const next = await refreshWechatSession(session, fetch);
+          if (!qqCurrentSession(session, generation)) throw qqAccountChanged();
+          const profile = await qqAccountFor(next);
+          if (!qqCurrentSession(session, generation)) throw qqAccountChanged();
+          host.storage.set(qqAuthStorageKey, next);
+          host.storage.set('qqmusic.profile.v1', profile);
           return profile;
         } catch (refreshError) {
+          if (!qqCurrentSession(session, generation)) throw qqAccountChanged();
           if (refreshError.qqGlobalCode !== 0 || ![1000, 104400, 104401].includes(refreshError.qqCode)) throw refreshError;
         }
       }
-      // The profile endpoint rejects QQ scan sessions even while they are still
-      // valid, so keep an unexpired credential and reuse the cached profile
-      // instead of signing the account out.
-      if (qqSessionExpiresAt(session) > Date.now() / 1000) {
-        return host.storage.get('qqmusic.profile.v1') || { id: session.musicid, name: session.musicid, imageUrl: '' };
+      // Only QQ scan sessions have the profile endpoint's known code-1000
+      // incompatibility. Explicitly invalid keys and WeChat must still sign out.
+      if (session.loginType === 2 && error.qqCode === 1000 && qqSessionExpiresAt(session) > Date.now() / 1000) {
+        const cached = host.storage.get('qqmusic.profile.v1');
+        return cached?.id === session.musicid ? cached : { id: session.musicid, name: session.musicid, imageUrl: '' };
       }
       host.storage.remove(qqAuthStorageKey);
+      host.storage.remove('qqmusic.profile.v1');
       return null;
     }
     throw error;
@@ -432,6 +464,8 @@ export async function account() {
 
 export function signOut() {
   signInGeneration++;
+  qqRefreshing = null;
+  qqRefreshRetry = null;
   host.storage.remove(qqAuthStorageKey);
   host.storage.remove('qqmusic.profile.v1');
 }

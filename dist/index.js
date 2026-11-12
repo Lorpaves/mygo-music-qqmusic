@@ -11194,6 +11194,7 @@ async function refreshQQSession(previous, fetch2) {
   const response = await fetch2(MUSIC, { method: "POST", headers: { "Content-Type": "application/json", "User-Agent": "QQMusic 14090008(android 10)", Referer: "https://y.qq.com/", Cookie: `uin=${previous.musicid}; qqmusic_uin=${previous.musicid}; qm_keyst=${previous.musickey}; qqmusic_key=${previous.musickey}` }, body: JSON.stringify({ comm: comm2, req: { module: "music.login.LoginServer", method: "Login", param } }) });
   if (!response.ok) throw new Error("QQ refresh: HTTP " + response.status);
   const next = session(await response.json(), "QQ refresh");
+  if (next.musicid !== previous.musicid) throw new Error("QQ refresh: account mismatch");
   for (const key of ["openid", "refresh_token", "unionid", "refresh_key", "nick", "logo", "encryptUin"]) if (!next[key] && previous[key]) next[key] = previous[key];
   return next;
 }
@@ -14561,30 +14562,45 @@ function qqReadSession() {
 var qqRefreshMargin = 24 * 60 * 60;
 var qqRefreshCooldown = 10 * 60 * 1e3;
 var qqRefreshing = null;
-var qqRefreshRetryAt = 0;
+var qqRefreshRetry = null;
 function qqSessionExpiresAt(session3) {
   const created = Number(session3?.musickeyCreateTime) || 0;
   const ttl = Number(session3?.keyExpiresIn) || 0;
   return created && ttl ? created + ttl : 0;
 }
+function qqSameSession(a, b) {
+  return !!a && !!b && a.musicid === b.musicid && a.loginType === b.loginType && a.musickey === b.musickey;
+}
+function qqCurrentSession(session3, generation) {
+  return generation === signInGeneration && qqSameSession(session3, qqReadSession());
+}
+function qqAccountChanged() {
+  return qqAuthError("The QQ Music account changed; please try again");
+}
 async function qqKeepAlive() {
   const session3 = qqReadSession();
+  const generation = signInGeneration;
   const expiresAt = qqSessionExpiresAt(session3);
   if (!session3 || session3.loginType !== 2 || !expiresAt || Date.now() / 1e3 < expiresAt - qqRefreshMargin) return session3;
   if (!session3.refresh_token && !session3.refresh_key) return session3;
-  if (Date.now() < qqRefreshRetryAt) return session3;
-  qqRefreshing = qqRefreshing || refreshQQSession(session3, fetch).then((next) => {
+  if (qqRefreshRetry?.generation === generation && qqSameSession(qqRefreshRetry.session, session3) && Date.now() < qqRefreshRetry.at) return session3;
+  if (qqRefreshing?.generation === generation && qqSameSession(qqRefreshing.session, session3)) return qqRefreshing.promise;
+  const job = { session: session3, generation, promise: null };
+  qqRefreshing = job;
+  job.promise = refreshQQSession(session3, fetch).then((next) => {
+    if (!qqCurrentSession(session3, generation)) throw qqAccountChanged();
     host.storage.set(qqAuthStorageKey, next);
-    qqRefreshRetryAt = 0;
+    qqRefreshRetry = null;
     return next;
   }).catch((error) => {
-    qqRefreshRetryAt = Date.now() + qqRefreshCooldown;
-    console.warn(`QQ Music refresh: ${error.message}`);
+    if (!qqCurrentSession(session3, generation)) throw qqAccountChanged();
+    qqRefreshRetry = { session: session3, generation, at: Date.now() + qqRefreshCooldown };
+    console.warn("QQ Music refresh failed; retrying later");
     return session3;
   }).finally(() => {
-    qqRefreshing = null;
+    if (qqRefreshing === job) qqRefreshing = null;
   });
-  return qqRefreshing;
+  return job.promise;
 }
 function qqAuthContext(session3 = qqReadSession()) {
   session3 = qqSession(session3);
@@ -14623,10 +14639,13 @@ async function qqAccountFor(session3) {
   return { id: session3.musicid, name: info.nick || info.nickname || session3.musicid, imageUrl: info.headurl || info.logo || info.avatarUrl || info.avatar || "" };
 }
 async function qqFinishSignIn(value) {
+  const generation = ++signInGeneration;
   const session3 = qqSession(value);
   if (!session3) throw qqAuthError("QQ Music login returned an invalid credential");
   const profile = await qqAccountFor(session3);
+  if (generation !== signInGeneration) throw qqAccountChanged();
   host.storage.set(qqAuthStorageKey, session3);
+  host.storage.set("qqmusic.profile.v1", profile);
   return profile;
 }
 async function signIn() {
@@ -14667,26 +14686,37 @@ async function signIn() {
   }
 }
 async function account() {
-  let session3 = await qqKeepAlive();
+  const generation = signInGeneration;
+  const session3 = await qqKeepAlive();
   if (!session3) return null;
+  if (!qqCurrentSession(session3, generation)) throw qqAccountChanged();
   try {
-    return await qqAccountFor(session3);
+    const profile = await qqAccountFor(session3);
+    if (!qqCurrentSession(session3, generation)) throw qqAccountChanged();
+    return profile;
   } catch (error) {
+    if (!qqCurrentSession(session3, generation)) throw qqAccountChanged();
     if (error.qqGlobalCode === 0 && [1e3, 104400, 104401].includes(error.qqCode)) {
       if (session3.loginType === 1 && (session3.refresh_key || session3.refresh_token) && session3.device) {
         try {
-          session3 = await refreshWechatSession(session3, fetch);
-          const profile = await qqAccountFor(session3);
-          host.storage.set(qqAuthStorageKey, session3);
+          const next = await refreshWechatSession(session3, fetch);
+          if (!qqCurrentSession(session3, generation)) throw qqAccountChanged();
+          const profile = await qqAccountFor(next);
+          if (!qqCurrentSession(session3, generation)) throw qqAccountChanged();
+          host.storage.set(qqAuthStorageKey, next);
+          host.storage.set("qqmusic.profile.v1", profile);
           return profile;
         } catch (refreshError) {
+          if (!qqCurrentSession(session3, generation)) throw qqAccountChanged();
           if (refreshError.qqGlobalCode !== 0 || ![1e3, 104400, 104401].includes(refreshError.qqCode)) throw refreshError;
         }
       }
-      if (qqSessionExpiresAt(session3) > Date.now() / 1e3) {
-        return host.storage.get("qqmusic.profile.v1") || { id: session3.musicid, name: session3.musicid, imageUrl: "" };
+      if (session3.loginType === 2 && error.qqCode === 1e3 && qqSessionExpiresAt(session3) > Date.now() / 1e3) {
+        const cached = host.storage.get("qqmusic.profile.v1");
+        return cached?.id === session3.musicid ? cached : { id: session3.musicid, name: session3.musicid, imageUrl: "" };
       }
       host.storage.remove(qqAuthStorageKey);
+      host.storage.remove("qqmusic.profile.v1");
       return null;
     }
     throw error;
@@ -14694,6 +14724,8 @@ async function account() {
 }
 function signOut() {
   signInGeneration++;
+  qqRefreshing = null;
+  qqRefreshRetry = null;
   host.storage.remove(qqAuthStorageKey);
   host.storage.remove("qqmusic.profile.v1");
 }

@@ -76,6 +76,7 @@ export async function refreshQQSession(previous, fetch) {
   const response = await fetch(MUSIC, { method: "POST", headers: { "Content-Type": "application/json", "User-Agent": "QQMusic 14090008(android 10)", Referer: "https://y.qq.com/", Cookie: `uin=${previous.musicid}; qqmusic_uin=${previous.musicid}; qm_keyst=${previous.musickey}; qqmusic_key=${previous.musickey}` }, body: JSON.stringify({ comm, req: { module: "music.login.LoginServer", method: "Login", param } }) });
   if (!response.ok) throw new Error("QQ refresh: HTTP " + response.status);
   const next = session(await response.json(), "QQ refresh");
+  if (next.musicid !== previous.musicid) throw new Error("QQ refresh: account mismatch");
   for (const key of ["openid", "refresh_token", "unionid", "refresh_key", "nick", "logo", "encryptUin"]) if (!next[key] && previous[key]) next[key] = previous[key];
   return next;
 }
