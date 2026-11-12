@@ -1,6 +1,6 @@
 # QQ 音乐 · 微信扫码版 for MyGo Music
 
-当前版本 **0.3.3**，需要 MyGo Music **0.1.20+**。默认使用微信扫码登录，直接连接腾讯服务；无需 API 服务、Cookie 手动配置、Node 后台或 ffmpeg。
+当前版本 **0.3.4**，需要 MyGo Music **0.1.20+**。默认使用微信扫码登录，直接连接腾讯服务；无需 API 服务、Cookie 手动配置、Node 后台或 ffmpeg。
 
 基于 [Amamiya23/mygo-music-qq-plugin](https://github.com/Amamiya23/mygo-music-qq-plugin) 的 0.3.0 修改。接口兼容处理也参考了 [dddaniel1/mygo-plugin-qqmusic](https://github.com/dddaniel1/mygo-plugin-qqmusic) 和 Lyrics / QQMusicClient 项目。完整来源与许可证见 [NOTICE.md](NOTICE.md)。
 
@@ -28,7 +28,7 @@ Lorpaves/mygo-music-qqmusic
 - 搜索歌曲、歌手、专辑和歌单；搜索建议和翻页。
 - 精选歌单、排行榜、专辑和歌手页面、评论读取。
 - 微信登录后读取自建歌单、收藏歌单、我喜欢、收藏专辑和个人推荐。
-- MP3 标准 / 高音质和 FLAC 无损播放；按 MyGo 中选择的音质请求，无法获取高音质时降级，并返回实际音质。
+- MP3 标准 / 高音质和 FLAC 无损播放；按 MyGo 中选择的音质请求，无法获取高音质或音源接口返回 HTTP 500/502/503/504 时继续尝试低一档，每档最多请求一次，并返回实际音质。
 - QQ 音乐逐字歌词、翻译；没有逐字歌词时使用普通 LRC。
 - 保留上游的喜欢歌曲、收藏专辑、歌单编辑和私人电台功能。
 
@@ -50,7 +50,7 @@ Lorpaves/mygo-music-qqmusic
 
 收藏专辑页面已在 MyGo 中实际验证正常加载。
 
-离线测试 **70 项通过，3 项按上游设置跳过**；跳过项是两项可选 MoeJS 独立测试和一项上游在线测试，实际 MyGo 加载及 `live.mjs` 在线测试另行完成。账号写入操作使用模拟响应验证，没有为测试创建、改名、删除线上歌单或改动收藏。
+2026-11-12：离线测试 **124 项通过，3 项按上游设置跳过**，包含源码和发行包的音质降级测试。跳过项是两项可选 MoeJS 独立测试和一项上游在线测试；上述真实账号检查为 2026-11-07 的结果。账号写入操作使用模拟响应验证，没有为测试创建、改名、删除线上歌单或改动收藏。
 
 ## 开发
 

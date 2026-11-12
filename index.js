@@ -19,7 +19,11 @@ async function rpc(module, method, param, comm) {
   const auth = module === "music.globalComment.CommentRead" ? null : qqAuthContext();
   comm = comm || auth?.comm || { ct: 24, cv: 0 };
   const response = await fetch(API, { method: "POST", headers: auth ? { ...headers, Cookie: auth.cookie } : headers, body: JSON.stringify({ comm, req_0: { module, method, param } }) });
-  if (!response.ok) throw new Error(`QQ Music HTTP ${response.status}`);
+  if (!response.ok) {
+    const error = new Error(`QQ Music HTTP ${response.status}`);
+    error.qqHttpStatus = response.status;
+    throw error;
+  }
   const body = await response.json();
   // The desktop search occasionally rejects anonymous requests (2001).
   // Keep QQ's public web search as a fallback, without relaying credentials.
@@ -132,11 +136,21 @@ export async function stream({ id, quality = "standard" }) {
   const qualities = [{ prefix: "M500", type: "mp3", quality: "standard", size: t.file?.size_128mp3 }];
   if (session && (quality === "high" || quality === "lossless")) qualities.unshift({ prefix: "M800", type: "mp3", quality: "high", size: t.file?.size_320mp3 });
   if (session && quality === "lossless") qualities.unshift({ prefix: "F000", type: "flac", quality: "lossless", size: t.file?.size_flac });
+  let lastStreamError;
   for (const q of qualities) {
     const param = { filename: [`${q.prefix}${id}${media}.${q.type}`], guid, songmid: [id], songtype: [0], uin: session?.musicid || "0" };
     if (session) param.ctx = 0;
     else { param.loginflag = 1; param.platform = "20"; }
-    const data = await rpc(session ? "music.vkey.GetVkey" : "vkey.GetVkeyServer", session ? "UrlGetVkey" : "CgiGetVkey", param);
+    let data;
+    try {
+      data = await rpc(session ? "music.vkey.GetVkey" : "vkey.GetVkeyServer", session ? "UrlGetVkey" : "CgiGetVkey", param);
+    } catch (error) {
+      // Try each lower quality once for transient server failures. Authentication,
+      // cancellation, rate limits and malformed replies must still reach the host.
+      if (![500, 502, 503, 504].includes(error?.qqHttpStatus)) throw error;
+      lastStreamError = error;
+      continue;
+    }
     const entry = (data.midurlinfo || []).find(item => (!item.songmid || item.songmid === id) && (item.wifiurl || item.purl));
     if (!entry) continue;
     const base = (data.sip || []).find(url => /^https?:\/\/(?:[a-z0-9-]+\.)*(?:qqmusic\.qq\.com|qq\.com)(?::\d+)?\//i.test(url) && !/^http:\/\/ws/i.test(url)) || "https://isure.stream.qqmusic.qq.com/";
@@ -144,6 +158,7 @@ export async function stream({ id, quality = "standard" }) {
     if (!/^https?:$/.test(address.protocol) || !/(^|\.)qq\.com$/i.test(address.hostname)) throw new Error("QQ Music returned an invalid stream host");
     return { url: address.href, type: q.type, quality: q.quality, size: Number(q.size) || 0, gain: Number(t.volume?.gain) || 0, peak: Number(t.volume?.peak) || 0, headers: { Referer: "https://y.qq.com/", "User-Agent": "Mozilla/5.0" } };
   }
+  if (lastStreamError) throw lastStreamError;
   fail(session ? "unavailable" : "signIn", host.t(session ? "QQ Music did not provide a playable stream" : "Sign in to QQ Music"));
 }
 

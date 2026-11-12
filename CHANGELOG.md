@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.4 — 2026-11-12
+
+- Continue to the next lower audio quality when a vkey request returns HTTP 500, 502, 503, or 504, with at most one request per quality (#2).
+- Preserve the last server error when no quality succeeds, and keep authentication failures, cancellation, rate limits, malformed replies and invalid stream hosts visible.
+- Cover the fallback and error boundaries against both source and the standalone release bundle.
+
 ## 0.3.3 — 2026-11-12
 
 - Renew QQ scan sessions from their refresh token before the three-day credential expires, persisting rotated tokens and backing off after failed renewals.
