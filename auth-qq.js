@@ -1,4 +1,5 @@
 const QR = "https://xui.ptlogin2.qq.com";
+const MUSIC = "https://u.y.qq.com/cgi-bin/musicu.fcg";
 const JUMP = "https://graph.qq.com/oauth2.0/login_jump";
 function hash33(text, hash) {
   for (let i = 0; i < text.length; i++) hash = (hash * 33 + text.charCodeAt(i)) >>> 0;
@@ -51,18 +52,32 @@ function status(body) {
   return values;
 }
 
-function session(body) {
-  if (!body || typeof body.code !== "number" || !body.req || typeof body.req.code !== "number") throw new Error("QQ login: malformed response");
-  if (body.code !== 0 || body.req.code !== 0 || body.req.subcode) throw new Error("QQ login rejected: " + body.code + "/" + body.req.code);
+function session(body, label = "QQ login") {
+  if (!body || typeof body.code !== "number" || !body.req || typeof body.req.code !== "number") throw new Error(label + ": malformed response");
+  if (body.code !== 0 || body.req.code !== 0 || body.req.subcode) throw new Error(label + " rejected: " + body.code + "/" + body.req.code);
   const data = body.req.data;
-  if (!data || typeof data !== "object") throw new Error("QQ login: missing session");
+  if (!data || typeof data !== "object") throw new Error(label + ": missing session");
   const id = typeof data.musicid === "string" ? data.musicid : Number.isSafeInteger(data.musicid) ? String(data.musicid) : "";
-  if (!/^\d+$/.test(id) || !/[1-9]/.test(id) || typeof data.musickey !== "string" || !data.musickey || /[;\s]/.test(data.musickey) || Number(data.loginType) !== 2) throw new Error("QQ login: invalid session");
+  if (!/^\d+$/.test(id) || !/[1-9]/.test(id) || typeof data.musickey !== "string" || !data.musickey || /[;\s]/.test(data.musickey) || Number(data.loginType) !== 2) throw new Error(label + ": invalid session");
   const result = { musicid: id, musickey: data.musickey, loginType: 2 };
   for (const key of ["nick", "logo", "encryptUin", "openid", "refresh_token", "unionid", "refresh_key"]) if (typeof data[key] === "string" && data[key]) result[key] = data[key];
   for (const key of ["musickeyCreateTime", "keyExpiresIn"]) { const n = Number(data[key]); if (Number.isSafeInteger(n) && n > 0) result[key] = n; }
-  if (result.musickeyCreateTime && result.keyExpiresIn && Date.now() / 1000 >= result.musickeyCreateTime + result.keyExpiresIn) throw new Error("QQ login: expired session");
+  if (result.musickeyCreateTime && result.keyExpiresIn && Date.now() / 1000 >= result.musickeyCreateTime + result.keyExpiresIn) throw new Error(label + ": expired session");
   return result;
+}
+
+// QQ scan sessions last three days. Requesting a new musickey keeps the
+// account signed in without another QR scan. The server may rotate
+// refresh_token, so callers must persist the session it returns.
+export async function refreshQQSession(previous, fetch) {
+  if (!previous.refresh_token && !previous.refresh_key) throw new Error("QQ refresh: no refresh token");
+  const param = { openid: previous.openid || "", refresh_token: previous.refresh_token || "", str_musicid: previous.musicid, musickey: previous.musickey, unionid: previous.unionid || "", refresh_key: previous.refresh_key || "", loginMode: 2 };
+  const comm = { ct: 11, cv: 14090008, v: 14090008, chid: "10003505", tmeAppID: "qqmusic", qq: previous.musicid, authst: previous.musickey, tmeLoginType: 2 };
+  const response = await fetch(MUSIC, { method: "POST", headers: { "Content-Type": "application/json", "User-Agent": "QQMusic 14090008(android 10)", Referer: "https://y.qq.com/", Cookie: `uin=${previous.musicid}; qqmusic_uin=${previous.musicid}; qm_keyst=${previous.musickey}; qqmusic_key=${previous.musickey}` }, body: JSON.stringify({ comm, req: { module: "music.login.LoginServer", method: "Login", param } }) });
+  if (!response.ok) throw new Error("QQ refresh: HTTP " + response.status);
+  const next = session(await response.json(), "QQ refresh");
+  for (const key of ["openid", "refresh_token", "unionid", "refresh_key", "nick", "logo", "encryptUin"]) if (!next[key] && previous[key]) next[key] = previous[key];
+  return next;
 }
 
 export async function qqSignIn({ fetch, prompt, sleep, decodeQR }) {

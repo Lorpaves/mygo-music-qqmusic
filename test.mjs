@@ -185,6 +185,90 @@ test('stream surfaces HTTP errors', async () => {
   await assert.rejects(() => plugin.stream({ id: mid, quality: 'standard' }));
 });
 
+const scanSession = (overrides = {}) => {
+  const now = Math.floor(Date.now() / 1000);
+  return { musicid: '1935851044', musickey: 'old-key', loginType: 2, openid: 'open-id',
+    unionid: 'union-id', refresh_token: 'token-1', musickeyCreateTime: now,
+    keyExpiresIn: 259200, ...overrides };
+};
+const refreshed = (now) => ({ code: 0, req: { code: 0, data: { musicid: 1935851044,
+  musickey: 'new-key', loginType: 2, refresh_token: 'token-2', openid: 'open-id',
+  unionid: 'union-id', musickeyCreateTime: now, keyExpiresIn: 259200 } } });
+
+for (const [label, remaining] of [['an expired', -60], ['an almost expired', 3600]]) {
+  test(`${label} QQ scan session is refreshed before playback`, async () => {
+    const now = Math.floor(Date.now() / 1000);
+    storage.set('qqmusic.auth.v1', scanSession({ musickeyCreateTime: now - 259200 + remaining }));
+    respond = (_input, init) => {
+      const body = JSON.parse(init.body);
+      if (body.req) {
+        assert.equal(body.req.method, 'Login');
+        assert.equal(body.comm.tmeLoginType, 2);
+        assert.equal(body.comm.qq, '1935851044');
+        assert.equal(body.req.param.str_musicid, '1935851044');
+        assert.equal(body.req.param.refresh_token, 'token-1');
+        return response(refreshed(now));
+      }
+      assert.match(init.headers.Cookie, /qm_keyst=new-key/);
+      return response(envelope(body.req_0.method === 'get_song_detail_yqq'
+        ? { track_info: { mid, file: { media_mid: 'media-mid', size_128mp3: 100 } } }
+        : { sip: ['https://stream.qqmusic.qq.com/'], midurlinfo: [{ songmid: mid, purl: 'refreshed.mp3' }] }));
+    };
+    const result = await plugin.stream({ id: mid, quality: 'standard' });
+    assert.equal(result.url, 'https://stream.qqmusic.qq.com/refreshed.mp3');
+    const saved = storage.get('qqmusic.auth.v1');
+    assert.equal(saved.musickey, 'new-key');
+    assert.equal(saved.refresh_token, 'token-2');
+    assert.equal(saved.musicid, '1935851044');
+    assert.equal(saved.loginType, 2);
+  });
+}
+
+test('playback keeps a fresh QQ scan session untouched', async () => {
+  storage.set('qqmusic.auth.v1', scanSession());
+  respond = (_input, init) => {
+    const body = JSON.parse(init.body);
+    assert.equal(body.req, undefined);
+    return response(envelope(body.req_0.method === 'get_song_detail_yqq'
+      ? { track_info: { mid, file: { media_mid: 'media-mid', size_128mp3: 100 } } }
+      : { sip: ['https://stream.qqmusic.qq.com/'], midurlinfo: [{ songmid: mid, purl: 'fresh.mp3' }] }));
+  };
+  await plugin.stream({ id: mid, quality: 'standard' });
+  assert.equal(calls.length, 2);
+  assert.equal(storage.get('qqmusic.auth.v1').musickey, 'old-key');
+});
+
+test('a failed refresh keeps the previous session and does not block playback', async () => {
+  const now = Math.floor(Date.now() / 1000);
+  storage.set('qqmusic.auth.v1', scanSession({ musickeyCreateTime: now - 259200 - 60 }));
+  respond = (_input, init) => {
+    const body = JSON.parse(init.body);
+    if (body.req) return response({ code: 0, req: { code: 1000, data: null } });
+    return response(envelope(body.req_0.method === 'get_song_detail_yqq'
+      ? { track_info: { mid, file: { media_mid: 'media-mid', size_128mp3: 100 } } }
+      : { sip: ['https://stream.qqmusic.qq.com/'], midurlinfo: [{ songmid: mid, purl: 'anonymous.mp3' }] }));
+  };
+  const result = await plugin.stream({ id: mid, quality: 'standard' });
+  assert.equal(result.url, 'https://stream.qqmusic.qq.com/anonymous.mp3');
+  assert.equal(storage.get('qqmusic.auth.v1').musickey, 'old-key');
+});
+
+test('account reuses the cached profile instead of signing out a usable QQ session', async () => {
+  storage.set('qqmusic.auth.v1', scanSession());
+  storage.set('qqmusic.profile.v1', { id: '1935851044', name: 'Cached', imageUrl: 'avatar' });
+  respond = () => response({ code: 0, req_0: { code: 1000, data: null } });
+  assert.deepEqual(await plugin.account(), { id: '1935851044', name: 'Cached', imageUrl: 'avatar' });
+  assert.equal(storage.get('qqmusic.auth.v1').musickey, 'old-key');
+});
+
+test('account still signs out an expired QQ session the server refuses to refresh', async () => {
+  const now = Math.floor(Date.now() / 1000);
+  storage.set('qqmusic.auth.v1', scanSession({ musickeyCreateTime: now - 259200 - 60 }));
+  respond = () => response({ code: 0, req_0: { code: 1000, data: null } });
+  assert.equal(await plugin.account(), null);
+  assert.equal(storage.get('qqmusic.auth.v1'), undefined);
+});
+
 test('lyrics requests the MID and returns LRC', async () => {
   const lrc = '[00:01.00]Fixture lyric';
   respond = () => response({ code: 0, lyric: Buffer.from(lrc).toString('base64'),

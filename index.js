@@ -1,4 +1,4 @@
-import { qqSignIn } from './auth-qq.js';
+import { qqSignIn, refreshQQSession } from './auth-qq.js';
 import { wechatSignIn, wechatDeviceComm, refreshWechatSession } from './auth-wechat.js';
 import { decodeQR } from './qr.js';
 import { wechatRandom, wechatCookieFetch } from './wechat-host.js';
@@ -122,6 +122,7 @@ export async function suggest({ query }) {
 }
 
 export async function stream({ id, quality = "standard" }) {
+  await qqKeepAlive();
   const detail = await rpc("music.pf_song_detail_svr", "get_song_detail_yqq", { song_type: 0, song_mid: id, song_id: "0" });
   const t = detail.track_info;
   if (!t || (t.mid || t.songmid) !== id) fail("unavailable", "Song details are unavailable");
@@ -262,7 +263,7 @@ export function stations() {
 
 export async function stationNext({ id }) {
   if (id !== "personal-fm") fail("unavailable", "Unknown station");
-  if (!qqReadSession()) fail("signIn", "Sign in to QQ Music");
+  if (!(await qqKeepAlive())) fail("signIn", "Sign in to QQ Music");
   const data = await rpc("music.radioProxy.MbTrackRadioSvr", "get_radio_track", { id: 99, firstplay: 1, num: 15 });
   if (!Array.isArray(data.tracks)) throw new Error("QQ Music: malformed radio response");
   return data.tracks.map(trackOf).filter(track => track.id);
@@ -290,6 +291,38 @@ function qqReadSession() {
   return qqSession(host.storage.get(qqAuthStorageKey));
 }
 export { qqReadSession, qqAuthContext, qqAuthRpc };
+
+// A QQ scan session expires after three days; renew it from the stored
+// refresh_token a day early so listening keeps working without a new scan.
+// WeChat sessions carry their own refresh flow in account().
+const qqRefreshMargin = 24 * 60 * 60;
+const qqRefreshCooldown = 10 * 60 * 1000;
+let qqRefreshing = null;
+let qqRefreshRetryAt = 0;
+
+function qqSessionExpiresAt(session) {
+  const created = Number(session?.musickeyCreateTime) || 0;
+  const ttl = Number(session?.keyExpiresIn) || 0;
+  return created && ttl ? created + ttl : 0;
+}
+
+async function qqKeepAlive() {
+  const session = qqReadSession();
+  const expiresAt = qqSessionExpiresAt(session);
+  if (!session || session.loginType !== 2 || !expiresAt || Date.now() / 1000 < expiresAt - qqRefreshMargin) return session;
+  if (!session.refresh_token && !session.refresh_key) return session;
+  if (Date.now() < qqRefreshRetryAt) return session;
+  qqRefreshing = qqRefreshing || refreshQQSession(session, fetch).then(next => {
+    host.storage.set(qqAuthStorageKey, next);
+    qqRefreshRetryAt = 0;
+    return next;
+  }).catch(error => {
+    qqRefreshRetryAt = Date.now() + qqRefreshCooldown;
+    console.warn(`QQ Music refresh: ${error.message}`);
+    return session;
+  }).finally(() => { qqRefreshing = null; });
+  return qqRefreshing;
+}
 
 function qqAuthContext(session = qqReadSession()) {
   session = qqSession(session);
@@ -368,7 +401,7 @@ export async function signIn() {
 }
 
 export async function account() {
-  let session = qqReadSession();
+  let session = await qqKeepAlive();
   if (!session) return null;
   try {
     return await qqAccountFor(session);
@@ -383,6 +416,12 @@ export async function account() {
         } catch (refreshError) {
           if (refreshError.qqGlobalCode !== 0 || ![1000, 104400, 104401].includes(refreshError.qqCode)) throw refreshError;
         }
+      }
+      // The profile endpoint rejects QQ scan sessions even while they are still
+      // valid, so keep an unexpired credential and reuse the cached profile
+      // instead of signing the account out.
+      if (qqSessionExpiresAt(session) > Date.now() / 1000) {
+        return host.storage.get('qqmusic.profile.v1') || { id: session.musicid, name: session.musicid, imageUrl: '' };
       }
       host.storage.remove(qqAuthStorageKey);
       return null;
@@ -526,6 +565,7 @@ function decodeEntities(text) {
 const qqBrowse = createBrowse({ rpc, cgi, trackOf, t: text => host.t(text) });
 export async function home() {
   const page = await qqBrowse.home();
+  await qqKeepAlive();
   const session = qqReadSession();
   if (!session) return page;
   try {
@@ -546,8 +586,9 @@ export const browse = qqBrowse.browse;
 export const comments = qqBrowse.comments;
 
 // Authenticated RPC and CGI must send the Cookie for the supplied session.
-export function createLibrary({ qqAuthRpc, qqReadSession, qqAuthCgi, cgi, trackOf, fetch: fetchProfile = globalThis.fetch }) {
+export function createLibrary({ qqAuthRpc, qqReadSession, qqAuthCgi, cgi, trackOf, keepAlive, fetch: fetchProfile = globalThis.fetch }) {
   async function account(optional = false) {
+    if (keepAlive) await keepAlive();
     const s = await qqReadSession();
     if (!s || !/^\d+$/.test(String(s.musicid || '')) || !s.musickey || !s.loginType) {
       if (optional) return null;
@@ -782,7 +823,7 @@ export function createLibrary({ qqAuthRpc, qqReadSession, qqAuthCgi, cgi, trackO
     addToPlaylist: args => editSongs(args, true), removeFromPlaylist: args => editSongs(args, false) };
 }
 
-const qqLibrary = createLibrary({ qqAuthRpc, qqReadSession, qqAuthCgi: cgi, cgi, trackOf });
+const qqLibrary = createLibrary({ qqAuthRpc, qqReadSession, qqAuthCgi: cgi, cgi, trackOf, keepAlive: qqKeepAlive });
 export const playlists = qqLibrary.playlists;
 export const liked = qqLibrary.liked;
 export const isLiked = qqLibrary.isLiked;

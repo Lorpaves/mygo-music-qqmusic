@@ -11119,6 +11119,7 @@ var require_decoder = __commonJS({
 
 // auth-qq.js
 var QR = "https://xui.ptlogin2.qq.com";
+var MUSIC = "https://u.y.qq.com/cgi-bin/musicu.fcg";
 var JUMP = "https://graph.qq.com/oauth2.0/login_jump";
 function hash33(text, hash) {
   for (let i = 0; i < text.length; i++) hash = hash * 33 + text.charCodeAt(i) >>> 0;
@@ -11170,21 +11171,31 @@ function status(body) {
   if (values.length < 6 || values.length > 7) throw new Error("QQ login: malformed QR status");
   return values;
 }
-function session(body) {
-  if (!body || typeof body.code !== "number" || !body.req || typeof body.req.code !== "number") throw new Error("QQ login: malformed response");
-  if (body.code !== 0 || body.req.code !== 0 || body.req.subcode) throw new Error("QQ login rejected: " + body.code + "/" + body.req.code);
+function session(body, label = "QQ login") {
+  if (!body || typeof body.code !== "number" || !body.req || typeof body.req.code !== "number") throw new Error(label + ": malformed response");
+  if (body.code !== 0 || body.req.code !== 0 || body.req.subcode) throw new Error(label + " rejected: " + body.code + "/" + body.req.code);
   const data = body.req.data;
-  if (!data || typeof data !== "object") throw new Error("QQ login: missing session");
+  if (!data || typeof data !== "object") throw new Error(label + ": missing session");
   const id = typeof data.musicid === "string" ? data.musicid : Number.isSafeInteger(data.musicid) ? String(data.musicid) : "";
-  if (!/^\d+$/.test(id) || !/[1-9]/.test(id) || typeof data.musickey !== "string" || !data.musickey || /[;\s]/.test(data.musickey) || Number(data.loginType) !== 2) throw new Error("QQ login: invalid session");
+  if (!/^\d+$/.test(id) || !/[1-9]/.test(id) || typeof data.musickey !== "string" || !data.musickey || /[;\s]/.test(data.musickey) || Number(data.loginType) !== 2) throw new Error(label + ": invalid session");
   const result = { musicid: id, musickey: data.musickey, loginType: 2 };
   for (const key of ["nick", "logo", "encryptUin", "openid", "refresh_token", "unionid", "refresh_key"]) if (typeof data[key] === "string" && data[key]) result[key] = data[key];
   for (const key of ["musickeyCreateTime", "keyExpiresIn"]) {
     const n = Number(data[key]);
     if (Number.isSafeInteger(n) && n > 0) result[key] = n;
   }
-  if (result.musickeyCreateTime && result.keyExpiresIn && Date.now() / 1e3 >= result.musickeyCreateTime + result.keyExpiresIn) throw new Error("QQ login: expired session");
+  if (result.musickeyCreateTime && result.keyExpiresIn && Date.now() / 1e3 >= result.musickeyCreateTime + result.keyExpiresIn) throw new Error(label + ": expired session");
   return result;
+}
+async function refreshQQSession(previous, fetch2) {
+  if (!previous.refresh_token && !previous.refresh_key) throw new Error("QQ refresh: no refresh token");
+  const param = { openid: previous.openid || "", refresh_token: previous.refresh_token || "", str_musicid: previous.musicid, musickey: previous.musickey, unionid: previous.unionid || "", refresh_key: previous.refresh_key || "", loginMode: 2 };
+  const comm2 = { ct: 11, cv: 14090008, v: 14090008, chid: "10003505", tmeAppID: "qqmusic", qq: previous.musicid, authst: previous.musickey, tmeLoginType: 2 };
+  const response = await fetch2(MUSIC, { method: "POST", headers: { "Content-Type": "application/json", "User-Agent": "QQMusic 14090008(android 10)", Referer: "https://y.qq.com/", Cookie: `uin=${previous.musicid}; qqmusic_uin=${previous.musicid}; qm_keyst=${previous.musickey}; qqmusic_key=${previous.musickey}` }, body: JSON.stringify({ comm: comm2, req: { module: "music.login.LoginServer", method: "Login", param } }) });
+  if (!response.ok) throw new Error("QQ refresh: HTTP " + response.status);
+  const next = session(await response.json(), "QQ refresh");
+  for (const key of ["openid", "refresh_token", "unionid", "refresh_key", "nick", "logo", "encryptUin"]) if (!next[key] && previous[key]) next[key] = previous[key];
+  return next;
 }
 async function qqSignIn({ fetch: fetch2, prompt, sleep, decodeQR: decodeQR2 }) {
   async function send(url, options = {}) {
@@ -11244,7 +11255,7 @@ var query = (obj) => Object.entries(obj).map(([k, v]) => `${encodeURIComponent(k
 // auth-wechat.js
 var APP = "wx48db31d50e334801";
 var CONNECT = "https://open.weixin.qq.com/connect/qrconnect";
-var MUSIC = "https://u.y.qq.com/cgi-bin/musicu.fcg";
+var MUSIC2 = "https://u.y.qq.com/cgi-bin/musicu.fcg";
 var MOD = "c4231830a2eb5fc2827170641e79d80fec51bda9a22e4b4ab37d1f205a4ae44d928cda25879f66a3429051663312a127faf8a246bdaaf63918417e90d7c95b5908aa6a2d0f852e4a6770294a548ac1c2fe8f1f252fb826f4ac86ab9a00e7ce47d002a56e7c4b51eb889acc60ca6adbc9f72e81f4d31b1dd7464805264530ab1d";
 function bytes(s) {
   const t = encodeURIComponent(s), a = [];
@@ -11456,7 +11467,7 @@ async function wechatSignIn(deps) {
     throw new Error("Device bootstrap did not return QIMEI");
   }
   const headers2 = { "Content-Type": "application/json", "User-Agent": "QQMusic 14090008(android 10)", Referer: "https://y.qq.com/" };
-  let res = await request(fetch2, MUSIC, { method: "POST", headers: headers2, body: JSON.stringify({ comm: comm(d), req_0: { module: "music.getSession.session", method: "GetSession", param: { uid: "", vkey: 0, caller: 0 } } }) });
+  let res = await request(fetch2, MUSIC2, { method: "POST", headers: headers2, body: JSON.stringify({ comm: comm(d), req_0: { module: "music.getSession.session", method: "GetSession", param: { uid: "", vkey: 0, caller: 0 } } }) });
   const ds = checked(await res.json(), "req_0").session;
   if (!ds || ds.uid == null || ds.sid == null || !String(ds.uid) || !String(ds.sid)) throw new Error("Missing device session");
   d.uid = String(ds.uid);
@@ -11484,7 +11495,7 @@ async function wechatSignIn(deps) {
       await deps.prompt({ qr, text: "\u8BF7\u5728\u5FAE\u4FE1\u4E0A\u786E\u8BA4\u767B\u5F55" });
     } else if (status2[1] === "405") {
       if (!status2[2]) throw new Error("Missing WeChat authorization code");
-      res = await request(fetch2, MUSIC, { method: "POST", headers: headers2, body: JSON.stringify({ comm: { ...comm(d), tmeLoginType: 1 }, req: { module: "music.login.LoginServer", method: "Login", param: { code: status2[2], strAppid: APP } } }) });
+      res = await request(fetch2, MUSIC2, { method: "POST", headers: headers2, body: JSON.stringify({ comm: { ...comm(d), tmeLoginType: 1 }, req: { module: "music.login.LoginServer", method: "Login", param: { code: status2[2], strAppid: APP } } }) });
       return session2(checked(await res.json(), "req"), d);
     } else if (status2[1] !== "404" && status2[1] !== "408") throw new Error("Unknown WeChat QR status: " + status2[1]);
     await deps.sleep(1e3);
@@ -11494,7 +11505,7 @@ async function wechatSignIn(deps) {
 async function refreshWechatSession(previous, fetch2) {
   if (!previous.device || !previous.refresh_key && !previous.refresh_token) throw new Error("WeChat session cannot be refreshed");
   const data = { openid: previous.openid || "", refresh_token: previous.refresh_token || "", str_musicid: previous.musicid, musickey: previous.musickey, unionid: previous.unionid || "", refresh_key: previous.refresh_key || "", loginMode: 2 };
-  const response = await request(fetch2, MUSIC, { method: "POST", headers: { "Content-Type": "application/json", "User-Agent": "QQMusic 14090008(android 10)", Referer: "https://y.qq.com/", Cookie: `uin=${previous.musicid}; qqmusic_uin=${previous.musicid}; qm_keyst=${previous.musickey}; qqmusic_key=${previous.musickey}` }, body: JSON.stringify({ comm: { ...comm(previous.device), qq: previous.musicid, authst: previous.musickey, tmeLoginType: 1 }, req: { module: "music.login.LoginServer", method: "Login", param: data } }) });
+  const response = await request(fetch2, MUSIC2, { method: "POST", headers: { "Content-Type": "application/json", "User-Agent": "QQMusic 14090008(android 10)", Referer: "https://y.qq.com/", Cookie: `uin=${previous.musicid}; qqmusic_uin=${previous.musicid}; qm_keyst=${previous.musickey}; qqmusic_key=${previous.musickey}` }, body: JSON.stringify({ comm: { ...comm(previous.device), qq: previous.musicid, authst: previous.musickey, tmeLoginType: 1 }, req: { module: "music.login.LoginServer", method: "Login", param: data } }) });
   const next = session2(checked(await response.json(), "req"), previous.device);
   for (const key of ["openid", "refresh_token", "unionid", "refresh_key", "nick", "logo", "encryptUin"]) if (!next[key] && previous[key]) next[key] = previous[key];
   return next;
@@ -14381,6 +14392,7 @@ async function suggest({ query: query3 }) {
   return [...new Set(groups.flatMap((group) => (group.itemlist || []).map((item) => item?.name).filter(Boolean)))];
 }
 async function stream({ id, quality = "standard" }) {
+  await qqKeepAlive();
   const detail = await rpc("music.pf_song_detail_svr", "get_song_detail_yqq", { song_type: 0, song_mid: id, song_id: "0" });
   const t = detail.track_info;
   if (!t || (t.mid || t.songmid) !== id) fail("unavailable", "Song details are unavailable");
@@ -14524,7 +14536,7 @@ function stations() {
 }
 async function stationNext({ id }) {
   if (id !== "personal-fm") fail("unavailable", "Unknown station");
-  if (!qqReadSession()) fail("signIn", "Sign in to QQ Music");
+  if (!await qqKeepAlive()) fail("signIn", "Sign in to QQ Music");
   const data = await rpc("music.radioProxy.MbTrackRadioSvr", "get_radio_track", { id: 99, firstplay: 1, num: 15 });
   if (!Array.isArray(data.tracks)) throw new Error("QQ Music: malformed radio response");
   return data.tracks.map(trackOf).filter((track) => track.id);
@@ -14545,6 +14557,34 @@ function qqSession(value) {
 }
 function qqReadSession() {
   return qqSession(host.storage.get(qqAuthStorageKey));
+}
+var qqRefreshMargin = 24 * 60 * 60;
+var qqRefreshCooldown = 10 * 60 * 1e3;
+var qqRefreshing = null;
+var qqRefreshRetryAt = 0;
+function qqSessionExpiresAt(session3) {
+  const created = Number(session3?.musickeyCreateTime) || 0;
+  const ttl = Number(session3?.keyExpiresIn) || 0;
+  return created && ttl ? created + ttl : 0;
+}
+async function qqKeepAlive() {
+  const session3 = qqReadSession();
+  const expiresAt = qqSessionExpiresAt(session3);
+  if (!session3 || session3.loginType !== 2 || !expiresAt || Date.now() / 1e3 < expiresAt - qqRefreshMargin) return session3;
+  if (!session3.refresh_token && !session3.refresh_key) return session3;
+  if (Date.now() < qqRefreshRetryAt) return session3;
+  qqRefreshing = qqRefreshing || refreshQQSession(session3, fetch).then((next) => {
+    host.storage.set(qqAuthStorageKey, next);
+    qqRefreshRetryAt = 0;
+    return next;
+  }).catch((error) => {
+    qqRefreshRetryAt = Date.now() + qqRefreshCooldown;
+    console.warn(`QQ Music refresh: ${error.message}`);
+    return session3;
+  }).finally(() => {
+    qqRefreshing = null;
+  });
+  return qqRefreshing;
 }
 function qqAuthContext(session3 = qqReadSession()) {
   session3 = qqSession(session3);
@@ -14627,7 +14667,7 @@ async function signIn() {
   }
 }
 async function account() {
-  let session3 = qqReadSession();
+  let session3 = await qqKeepAlive();
   if (!session3) return null;
   try {
     return await qqAccountFor(session3);
@@ -14642,6 +14682,9 @@ async function account() {
         } catch (refreshError) {
           if (refreshError.qqGlobalCode !== 0 || ![1e3, 104400, 104401].includes(refreshError.qqCode)) throw refreshError;
         }
+      }
+      if (qqSessionExpiresAt(session3) > Date.now() / 1e3) {
+        return host.storage.get("qqmusic.profile.v1") || { id: session3.musicid, name: session3.musicid, imageUrl: "" };
       }
       host.storage.remove(qqAuthStorageKey);
       return null;
@@ -14774,6 +14817,7 @@ function decodeEntities(text) {
 var qqBrowse = createBrowse({ rpc, cgi, trackOf, t: (text) => host.t(text) });
 async function home() {
   const page = await qqBrowse.home();
+  await qqKeepAlive();
   const session3 = qqReadSession();
   if (!session3) return page;
   try {
@@ -14791,8 +14835,9 @@ async function home() {
 }
 var browse = qqBrowse.browse;
 var comments = qqBrowse.comments;
-function createLibrary({ qqAuthRpc: qqAuthRpc2, qqReadSession: qqReadSession2, qqAuthCgi, cgi: cgi2, trackOf: trackOf2, fetch: fetchProfile = globalThis.fetch }) {
+function createLibrary({ qqAuthRpc: qqAuthRpc2, qqReadSession: qqReadSession2, qqAuthCgi, cgi: cgi2, trackOf: trackOf2, keepAlive, fetch: fetchProfile = globalThis.fetch }) {
   async function account2(optional = false) {
+    if (keepAlive) await keepAlive();
     const s = await qqReadSession2();
     if (!s || !/^\d+$/.test(String(s.musicid || "")) || !s.musickey || !s.loginType) {
       if (optional) return null;
@@ -15043,7 +15088,7 @@ function createLibrary({ qqAuthRpc: qqAuthRpc2, qqReadSession: qqReadSession2, q
     removeFromPlaylist: (args) => editSongs(args, false)
   };
 }
-var qqLibrary = createLibrary({ qqAuthRpc, qqReadSession, qqAuthCgi: cgi, cgi, trackOf });
+var qqLibrary = createLibrary({ qqAuthRpc, qqReadSession, qqAuthCgi: cgi, cgi, trackOf, keepAlive: qqKeepAlive });
 var playlists = qqLibrary.playlists;
 var liked = qqLibrary.liked;
 var isLiked = qqLibrary.isLiked;
