@@ -96,3 +96,31 @@ test('profile fallback verifies the cached account identity', async () => {
   storage.set(profileKey, profile('22222')); respond = () => rejectedProfile(1000);
   assert.equal((await plugin.account()).id, '11111');
 });
+
+// Completing an old refresh must not clear a newer account's in-flight renewal.
+test('old refresh completion leaves the new shared renewal intact', async () => {
+  const firstReply = deferred(), secondReply = deferred(), firstEntered = deferred(), secondEntered = deferred();
+  let secondLogins = 0;
+  storage.set(authKey, session());
+  respond = body => {
+    if (!body.req) return profileReply();
+    if (body.comm.qq === '11111') { firstEntered.resolve(); return firstReply.promise; }
+    secondLogins++; secondEntered.resolve(); return secondReply.promise;
+  };
+  const old = assert.rejects(plugin.account(), /account changed/); await firstEntered.promise;
+  plugin.signOut(); await plugin.qqFinishSignIn(session('22222'));
+  const next = plugin.account(); await secondEntered.promise;
+  firstReply.resolve(refreshed(session())); await old;
+  const parallel = plugin.account();
+  assert.equal(secondLogins, 1); secondReply.resolve(refreshed(session('22222')));
+  await Promise.all([next, parallel]); assert.equal(storage.get(authKey).musicid, '22222');
+});
+
+// A transport error containing credentials must never put them in the log.
+test('refresh failure logging omits raw transport errors', async () => {
+  storage.set(authKey, session()); const logs = [], warn = console.warn;
+  console.warn = value => logs.push(value);
+  respond = body => { if (body.req) throw new Error('secret-fixture-token in request'); return profileReply(); };
+  try { await plugin.account(); } finally { console.warn = warn; }
+  assert.equal(logs.length, 1); assert.doesNotMatch(logs.join(' '), /secret-fixture-token/);
+});
