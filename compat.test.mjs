@@ -50,7 +50,7 @@ test('a malformed fallback does not pretend the search is empty', async () => {
   await assert.rejects(plugin.search({ query: 'fixture', kind: 'tracks', offset: 0 }), /malformed web search/);
 });
 
-test('signed-in playback accepts wifiurl without sip, as Lyrics does', async () => {
+test('signed-in playback accepts wifiurl without sip', async () => {
   storage.set('qqmusic.auth.v1', { musicid: '12345', musickey: 'W_fixture', loginType: 1 });
   respond = (_url, options) => {
     const request = JSON.parse(options.body);

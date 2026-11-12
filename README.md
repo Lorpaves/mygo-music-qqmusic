@@ -2,7 +2,15 @@
 
 当前版本 **0.3.4**，需要 MyGo Music **0.1.20+**。默认使用微信扫码登录，直接连接腾讯服务；无需 API 服务、Cookie 手动配置、Node 后台或 ffmpeg。
 
-基于 [Amamiya23/mygo-music-qq-plugin](https://github.com/Amamiya23/mygo-music-qq-plugin) 的 0.3.0 修改。接口兼容处理也参考了 [dddaniel1/mygo-plugin-qqmusic](https://github.com/dddaniel1/mygo-plugin-qqmusic) 和 Lyrics / QQMusicClient 项目。完整来源与许可证见 [NOTICE.md](NOTICE.md)。
+基于 [Amamiya23/mygo-music-qq-plugin](https://github.com/Amamiya23/mygo-music-qq-plugin) 的 0.3.0 修改，接口兼容处理参考第三方开源项目。完整来源与许可证见 [NOTICE.md](NOTICE.md)。
+
+## 使用声明
+
+本项目仅用于学习与技术研究。不得擅自将本项目用于未经相关权利人授权的第三方开发、产品集成或服务运营，亦不得用于侵权或其他违法用途。
+
+使用相关音乐服务、账号及内容时，应遵守服务提供方的使用规则与授权范围。本项目不提供音乐内容或账号权益授权，与腾讯、QQ 音乐及微信无隶属关系。
+
+本声明不改变源代码适用的 AGPL-3.0 及随附第三方许可证，也不限制这些许可证已授予的权利。
 
 ## 安装和登录
 
@@ -39,7 +47,7 @@ Lorpaves/mygo-music-qqmusic
 - 将默认登录方式改为微信，增加准备二维码的中文提示。
 - 登录状态先校验再保存；退出或新一轮登录会使旧登录请求失效。
 - 为不稳定的桌面搜索接口增加 Web 搜索回退。
-- 参考 Lyrics 的 `QMMusicService`，兼容播放结果的 `wifiurl`；CDN 未给域名时使用 QQ 音乐音频域名。
+- 参考第三方开源项目，兼容播放结果的 `wifiurl`；CDN 未给域名时使用 QQ 音乐音频域名。
 - 兼容不带 `dirType` 的当前歌单接口，自建歌单归入「我的歌单」，「我喜欢」等系统歌单禁止改名或删除。
 - 将收藏专辑接口返回的 Unix 时间戳转换为日期字符串，兼容 MyGo 的专辑类型。
 - 增加对应回归测试及只读在线检查脚本。
