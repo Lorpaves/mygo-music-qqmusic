@@ -417,7 +417,12 @@ export async function signIn() {
     host.storage.set('qqmusic.profile.v1', profile);
     return profile;
   } catch (error) {
-    error.message = host.t(error.message);
+    if (error.qqCode === 20279) {
+      const message = host.t('QQ Music device limit reached ({global}/{code})').replace('{global}', error.qqGlobalCode).replace('{code}', error.qqCode);
+      error.message = error.qqTip ? `${message} ${error.qqTip}` : message;
+    }
+    else if (error.qqLoginStage === 'wechat-token-exchange') error.message = host.t('QQ Music rejected the WeChat login ({global}/{code}/{subcode})').replace('{global}', error.qqGlobalCode).replace('{code}', error.qqCode).replace('{subcode}', error.qqSubcode || 0);
+    else error.message = host.t(error.message);
     throw error;
   }
 }

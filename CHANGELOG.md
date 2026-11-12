@@ -1,13 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.3.3 — 2026-11-12
 
-- Bind refresh and profile responses to the active account so signing out or switching accounts cannot restore an old credential.
-- Limit the profile compatibility fallback to QQ code `1000`, verify refreshed account identity, and keep raw transport errors out of logs.
-
-- Keep QQ scan logins alive: a musickey is renewed from the stored `refresh_token` a day before it expires, instead of waiting for the three-day TTL to lapse into `QQ Music UrlGetVkey: 0/1000`.
-- Persist the `refresh_token` returned by every renewal, retry at most once per ten minutes, and keep playing anonymously when a renewal fails.
-- Stop treating a profile request rejected with `1000` as a signed-out account: an unexpired QQ session falls back to the cached profile instead of being deleted.
+- Renew QQ scan sessions from their refresh token before the three-day credential expires, persisting rotated tokens and backing off after failed renewals.
+- Prevent late refresh and profile responses from restoring a signed-out account or overwriting a newly selected account.
+- Scope concurrent refreshes and retry cooldowns to the active account; verify that QQ refresh responses retain the same account identity.
+- Restrict the cached-profile workaround to unexpired QQ scan sessions rejected with code `1000`; revoked credentials and WeChat sessions still sign out.
+- Keep raw transport errors out of refresh logs so request credentials cannot be exposed there.
+- Preserve WeChat login business codes and report the `20279` device-limit rejection with account-management guidance.
 
 ## 0.3.2 — 2026-11-07
 
