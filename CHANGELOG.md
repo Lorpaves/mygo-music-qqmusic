@@ -2,9 +2,12 @@
 
 ## 0.3.3 — 2026-11-12
 
-- Preserve the business codes and login stage when QQ Music rejects the WeChat token exchange.
-- Report the `20279` device-limit rejection with the server's account-management guidance instead of a generic malformed-response error.
-- Distinguish malformed login responses from explicit service rejections without changing the QR login protocol.
+- Renew QQ scan sessions from their refresh token before the three-day credential expires, persisting rotated tokens and backing off after failed renewals.
+- Prevent late refresh and profile responses from restoring a signed-out account or overwriting a newly selected account.
+- Scope concurrent refreshes and retry cooldowns to the active account; verify that QQ refresh responses retain the same account identity.
+- Restrict the cached-profile workaround to unexpired QQ scan sessions rejected with code `1000`; revoked credentials and WeChat sessions still sign out.
+- Keep raw transport errors out of refresh logs so request credentials cannot be exposed there.
+- Preserve WeChat login business codes and report the `20279` device-limit rejection with account-management guidance.
 
 ## 0.3.2 — 2026-11-07
 

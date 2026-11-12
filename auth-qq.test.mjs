@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { qqSignIn } from "./auth-qq.js";
+import { qqSignIn, refreshQQSession } from "./auth-qq.js";
 
 const code = "ABCDEF0123456789ABCDEF0123456789";
 const callback = "https://ssl.ptlogin2.graph.qq.com/check_sig?x=1";
@@ -79,4 +79,45 @@ test("rejects bad session responses and bounds polling", async () => {
   const f = fixture({ statuses: ["66"] });
   await assert.rejects(qqSignIn(f.deps), /expired/);
   assert.equal(f.sleeps.length, 59);
+});
+
+test("refreshQQSession renews a QQ scan session and keeps the returned token", async () => {
+  const calls = [], now = Math.floor(Date.now() / 1000);
+  const fetch = async (address, options) => {
+    calls.push({ address, options, body: JSON.parse(options.body) });
+    return new Response(JSON.stringify({ code: 0, req: { code: 0, data: { musicid: 12345,
+      musickey: "Q_new", loginType: 2, refresh_token: "rotated", unionid: "union-id",
+      musickeyCreateTime: now, keyExpiresIn: 3600 } } }),
+    { status: 200, headers: { "content-type": "application/json" } });
+  };
+  const next = await refreshQQSession({ musicid: "12345", musickey: "Q_old", loginType: 2,
+    openid: "open-id", unionid: "union-id", refresh_token: "token-1" }, fetch);
+  assert.deepEqual(next, { musicid: "12345", musickey: "Q_new", loginType: 2,
+    openid: "open-id", unionid: "union-id", refresh_token: "rotated",
+    musickeyCreateTime: now, keyExpiresIn: 3600 });
+  const [call] = calls;
+  assert.equal(call.address, "https://u.y.qq.com/cgi-bin/musicu.fcg");
+  assert.equal(call.body.comm.tmeLoginType, 2);
+  assert.equal(call.body.comm.qq, "12345");
+  assert.equal(call.body.req.module, "music.login.LoginServer");
+  assert.equal(call.body.req.method, "Login");
+  assert.equal(call.body.req.param.refresh_token, "token-1");
+  assert.equal(call.body.req.param.str_musicid, "12345");
+  assert.match(call.options.headers.Cookie, /qm_keyst=Q_old/);
+});
+
+test("refreshQQSession refuses to run without a refresh token and reports rejections", async () => {
+  await assert.rejects(() => refreshQQSession({ musicid: "12345", musickey: "Q_old", loginType: 2 }, async () => {
+    throw new Error("unexpected request");
+  }), /no refresh token/);
+  const fetch = async () => new Response(JSON.stringify({ code: 0, req: { code: 1000, data: null } }),
+    { status: 200, headers: { "content-type": "application/json" } });
+  await assert.rejects(() => refreshQQSession({ musicid: "12345", musickey: "Q_old", loginType: 2,
+    refresh_token: "spent" }, fetch), /QQ refresh rejected: 0\/1000/);
+});
+
+// A renewal may rotate credentials, but it must not switch the authenticated account.
+test('refreshQQSession rejects a response for another account', async () => {
+  const fetch = async () => Response.json({ code: 0, req: { code: 0, data: { musicid: '99999', musickey: 'fixture', loginType: 2 } } });
+  await assert.rejects(refreshQQSession({ musicid: '12345', musickey: 'old-fixture', refresh_token: 'fixture' }, fetch), /account mismatch/);
 });

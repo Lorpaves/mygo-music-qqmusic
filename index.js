@@ -1,4 +1,4 @@
-import { qqSignIn } from './auth-qq.js';
+import { qqSignIn, refreshQQSession } from './auth-qq.js';
 import { wechatSignIn, wechatDeviceComm, refreshWechatSession } from './auth-wechat.js';
 import { decodeQR } from './qr.js';
 import { wechatRandom, wechatCookieFetch } from './wechat-host.js';
@@ -122,6 +122,7 @@ export async function suggest({ query }) {
 }
 
 export async function stream({ id, quality = "standard" }) {
+  await qqKeepAlive();
   const detail = await rpc("music.pf_song_detail_svr", "get_song_detail_yqq", { song_type: 0, song_mid: id, song_id: "0" });
   const t = detail.track_info;
   if (!t || (t.mid || t.songmid) !== id) fail("unavailable", "Song details are unavailable");
@@ -262,7 +263,7 @@ export function stations() {
 
 export async function stationNext({ id }) {
   if (id !== "personal-fm") fail("unavailable", "Unknown station");
-  if (!qqReadSession()) fail("signIn", "Sign in to QQ Music");
+  if (!(await qqKeepAlive())) fail("signIn", "Sign in to QQ Music");
   const data = await rpc("music.radioProxy.MbTrackRadioSvr", "get_radio_track", { id: 99, firstplay: 1, num: 15 });
   if (!Array.isArray(data.tracks)) throw new Error("QQ Music: malformed radio response");
   return data.tracks.map(trackOf).filter(track => track.id);
@@ -290,6 +291,57 @@ function qqReadSession() {
   return qqSession(host.storage.get(qqAuthStorageKey));
 }
 export { qqReadSession, qqAuthContext, qqAuthRpc };
+
+// A QQ scan session expires after three days; renew it from the stored
+// refresh_token a day early so listening keeps working without a new scan.
+// WeChat sessions carry their own refresh flow in account().
+const qqRefreshMargin = 24 * 60 * 60;
+const qqRefreshCooldown = 10 * 60 * 1000;
+let qqRefreshing = null;
+let qqRefreshRetry = null;
+
+function qqSessionExpiresAt(session) {
+  const created = Number(session?.musickeyCreateTime) || 0;
+  const ttl = Number(session?.keyExpiresIn) || 0;
+  return created && ttl ? created + ttl : 0;
+}
+
+function qqSameSession(a, b) {
+  return !!a && !!b && a.musicid === b.musicid && a.loginType === b.loginType && a.musickey === b.musickey;
+}
+
+function qqCurrentSession(session, generation) {
+  return generation === signInGeneration && qqSameSession(session, qqReadSession());
+}
+
+function qqAccountChanged() {
+  return qqAuthError("The QQ Music account changed; please try again");
+}
+
+async function qqKeepAlive() {
+  const session = qqReadSession();
+  const generation = signInGeneration;
+  const expiresAt = qqSessionExpiresAt(session);
+  if (!session || session.loginType !== 2 || !expiresAt || Date.now() / 1000 < expiresAt - qqRefreshMargin) return session;
+  if (!session.refresh_token && !session.refresh_key) return session;
+  if (qqRefreshRetry?.generation === generation && qqSameSession(qqRefreshRetry.session, session) && Date.now() < qqRefreshRetry.at) return session;
+  if (qqRefreshing?.generation === generation && qqSameSession(qqRefreshing.session, session)) return qqRefreshing.promise;
+  const job = { session, generation, promise: null };
+  qqRefreshing = job;
+  job.promise = refreshQQSession(session, fetch).then(next => {
+    if (!qqCurrentSession(session, generation)) throw qqAccountChanged();
+    host.storage.set(qqAuthStorageKey, next);
+    qqRefreshRetry = null;
+    return next;
+  }).catch(error => {
+    if (!qqCurrentSession(session, generation)) throw qqAccountChanged();
+    qqRefreshRetry = { session, generation, at: Date.now() + qqRefreshCooldown };
+    // A transport error can include request details; never log credentials.
+    console.warn("QQ Music refresh failed; retrying later");
+    return session;
+  }).finally(() => { if (qqRefreshing === job) qqRefreshing = null; });
+  return job.promise;
+}
 
 function qqAuthContext(session = qqReadSession()) {
   session = qqSession(session);
@@ -332,10 +384,13 @@ async function qqAccountFor(session) {
 }
 
 export async function qqFinishSignIn(value) {
+  const generation = ++signInGeneration;
   const session = qqSession(value);
   if (!session) throw qqAuthError("QQ Music login returned an invalid credential");
   const profile = await qqAccountFor(session);
+  if (generation !== signInGeneration) throw qqAccountChanged();
   host.storage.set(qqAuthStorageKey, session);
+  host.storage.set('qqmusic.profile.v1', profile);
   return profile;
 }
 
@@ -373,23 +428,39 @@ export async function signIn() {
 }
 
 export async function account() {
-  let session = qqReadSession();
+  const generation = signInGeneration;
+  const session = await qqKeepAlive();
   if (!session) return null;
+  if (!qqCurrentSession(session, generation)) throw qqAccountChanged();
   try {
-    return await qqAccountFor(session);
+    const profile = await qqAccountFor(session);
+    if (!qqCurrentSession(session, generation)) throw qqAccountChanged();
+    return profile;
   } catch (error) {
+    if (!qqCurrentSession(session, generation)) throw qqAccountChanged();
     if (error.qqGlobalCode === 0 && [1000, 104400, 104401].includes(error.qqCode)) {
       if (session.loginType === 1 && (session.refresh_key || session.refresh_token) && session.device) {
         try {
-          session = await refreshWechatSession(session, fetch);
-          const profile = await qqAccountFor(session);
-          host.storage.set(qqAuthStorageKey, session);
+          const next = await refreshWechatSession(session, fetch);
+          if (!qqCurrentSession(session, generation)) throw qqAccountChanged();
+          const profile = await qqAccountFor(next);
+          if (!qqCurrentSession(session, generation)) throw qqAccountChanged();
+          host.storage.set(qqAuthStorageKey, next);
+          host.storage.set('qqmusic.profile.v1', profile);
           return profile;
         } catch (refreshError) {
+          if (!qqCurrentSession(session, generation)) throw qqAccountChanged();
           if (refreshError.qqGlobalCode !== 0 || ![1000, 104400, 104401].includes(refreshError.qqCode)) throw refreshError;
         }
       }
+      // Only QQ scan sessions have the profile endpoint's known code-1000
+      // incompatibility. Explicitly invalid keys and WeChat must still sign out.
+      if (session.loginType === 2 && error.qqCode === 1000 && qqSessionExpiresAt(session) > Date.now() / 1000) {
+        const cached = host.storage.get('qqmusic.profile.v1');
+        return cached?.id === session.musicid ? cached : { id: session.musicid, name: session.musicid, imageUrl: '' };
+      }
       host.storage.remove(qqAuthStorageKey);
+      host.storage.remove('qqmusic.profile.v1');
       return null;
     }
     throw error;
@@ -398,6 +469,8 @@ export async function account() {
 
 export function signOut() {
   signInGeneration++;
+  qqRefreshing = null;
+  qqRefreshRetry = null;
   host.storage.remove(qqAuthStorageKey);
   host.storage.remove('qqmusic.profile.v1');
 }
@@ -531,6 +604,7 @@ function decodeEntities(text) {
 const qqBrowse = createBrowse({ rpc, cgi, trackOf, t: text => host.t(text) });
 export async function home() {
   const page = await qqBrowse.home();
+  await qqKeepAlive();
   const session = qqReadSession();
   if (!session) return page;
   try {
@@ -551,8 +625,9 @@ export const browse = qqBrowse.browse;
 export const comments = qqBrowse.comments;
 
 // Authenticated RPC and CGI must send the Cookie for the supplied session.
-export function createLibrary({ qqAuthRpc, qqReadSession, qqAuthCgi, cgi, trackOf, fetch: fetchProfile = globalThis.fetch }) {
+export function createLibrary({ qqAuthRpc, qqReadSession, qqAuthCgi, cgi, trackOf, keepAlive, fetch: fetchProfile = globalThis.fetch }) {
   async function account(optional = false) {
+    if (keepAlive) await keepAlive();
     const s = await qqReadSession();
     if (!s || !/^\d+$/.test(String(s.musicid || '')) || !s.musickey || !s.loginType) {
       if (optional) return null;
@@ -787,7 +862,7 @@ export function createLibrary({ qqAuthRpc, qqReadSession, qqAuthCgi, cgi, trackO
     addToPlaylist: args => editSongs(args, true), removeFromPlaylist: args => editSongs(args, false) };
 }
 
-const qqLibrary = createLibrary({ qqAuthRpc, qqReadSession, qqAuthCgi: cgi, cgi, trackOf });
+const qqLibrary = createLibrary({ qqAuthRpc, qqReadSession, qqAuthCgi: cgi, cgi, trackOf, keepAlive: qqKeepAlive });
 export const playlists = qqLibrary.playlists;
 export const liked = qqLibrary.liked;
 export const isLiked = qqLibrary.isLiked;
