@@ -14351,8 +14351,66 @@ async function cgi(path, params) {
   const response = await fetch(`https://c.y.qq.com${path}?${query3}`, { headers: { Referer: "https://y.qq.com/", "User-Agent": "Mozilla/5.0", ...auth ? { Cookie: auth.cookie } : {} } });
   if (!response.ok) throw new Error(`QQ Music HTTP ${response.status}`);
   const body = await response.json();
-  if (body.code !== 0 || body.subcode) throw new Error(`QQ Music: ${body.code}`);
+  if (![0, "0"].includes(body?.code) || body.subcode != null && ![0, "0"].includes(body.subcode)) {
+    const error = new Error(`QQ Music CGI: ${body?.code ?? "missing"}/${body?.subcode ?? 0}`);
+    error.qqCGIFailure = true;
+    error.qqGlobalCode = body?.code;
+    error.qqCode = body?.subcode;
+    throw error;
+  }
   return body;
+}
+async function publicPlaylist(id, { cgi: cgi2, rpc: rpc2, trackOf: trackOf2 }) {
+  let body;
+  try {
+    body = await cgi2("/qzone/fcg-bin/fcg_ucc_getcdinfo_byids_cp.fcg", { disstid: id, type: "1", json: "1", utf8: "1", onlysong: "0", new_format: "1" });
+  } catch (error) {
+    if (!error?.qqCGIFailure) throw error;
+  }
+  const mapTracks = (items) => {
+    if (!Array.isArray(items)) throw new Error("QQ Music: missing playlist songs");
+    return items.map(trackOf2).map((track) => {
+      if (!track.id) throw new Error("QQ Music: missing playlist song MID");
+      return track;
+    });
+  };
+  const result = (info, tracks2, total) => ({
+    id: String(id),
+    name: info.dissname || info.title || "",
+    imageUrl: info.logo || info.picurl || "",
+    description: info.desc || "",
+    owner: info.nickname || info.nick || info.host_nick || "",
+    trackCount: total || tracks2.length,
+    tracks: tracks2
+  });
+  if (body) {
+    const info = body.cdlist?.[0];
+    if (!info) throw new Error("QQ Music: playlist unavailable");
+    const tracks2 = mapTracks(info.songlist), total = Number(info.total_song_num || info.songnum) || 0;
+    if (!tracks2.length && total > 0) throw new Error("QQ Music: playlist songs unavailable");
+    return result(info, tracks2, total);
+  }
+  const tracks = [], seen = /* @__PURE__ */ new Set();
+  let first;
+  for (let offset = 0; offset < 1e4; ) {
+    const data = await rpc2("music.srfDissInfo.aiDissInfo", "uniform_get_Dissinfo", { disstid: Number(id), song_begin: offset, song_num: 100 }, { ct: 24, cv: 0 });
+    if (!data || ["code", "subcode"].some((k) => data[k] != null && ![0, "0"].includes(data[k]))) {
+      throw new Error(`QQ Music playlist: ${data?.code ?? "missing"}/${data?.subcode ?? 0}`);
+    }
+    first || (first = data);
+    if (!first.dirinfo || first.dirinfo.id != null && String(first.dirinfo.id) !== String(id)) throw new Error("QQ Music: playlist unavailable");
+    const page = mapTracks(data.songlist), fingerprint = JSON.stringify(page.map((t) => t.id));
+    if (page.length && seen.has(fingerprint)) throw new Error("QQ Music: playlist paging repeated");
+    seen.add(fingerprint);
+    tracks.push(...page);
+    const total = Number(data.total_song_num ?? first.dirinfo.songnum ?? 0);
+    if (!Number.isSafeInteger(total) || total < 0) throw new Error("QQ Music: invalid playlist total");
+    const more = data.hasmore === true || Number(data.hasmore) === 1;
+    if (!more && tracks.length >= total) return result(first.dirinfo, tracks, total);
+    if (!page.length) throw new Error("QQ Music: playlist incomplete");
+    offset += page.length;
+  }
+  throw new Error("QQ Music: playlist incomplete");
 }
 function artistOf(a = {}) {
   const mid = a.mid || a.singermid || a.singer_mid || a.singerMid || a.singerMID || "";
@@ -14797,21 +14855,15 @@ function createBrowse({ rpc: rpc2, cgi: cgi2, trackOf: trackOf2, t = (value) => 
     if (id.startsWith("chart:")) {
       const topid = id.slice(6);
       if (!/^[1-9]\d*$/.test(topid) || !Number.isSafeInteger(Number(topid))) unavailable("Invalid chart ID");
-      const data2 = await rpc2("musicToplist.ToplistInfoServer", "GetDetail", { topid: Number(topid), offset: 0, num: 100, period: "" }, pc);
-      const info2 = data2.data || {};
-      if (Number(info2.recType) !== 10005) unavailable("This chart is not a song chart");
-      const tracks2 = tracksOf(list(data2.songInfoList, "chart songs"));
-      if (!tracks2.length) unavailable("Chart songs are unavailable");
-      return { id, name: info2.title || "", imageUrl: info2.headPicUrl || info2.frontPicUrl || "", description: info2.intro || "", trackCount: Number(info2.totalNum) || tracks2.length, tracks: tracks2 };
+      const data = await rpc2("musicToplist.ToplistInfoServer", "GetDetail", { topid: Number(topid), offset: 0, num: 100, period: "" }, pc);
+      const info = data.data || {};
+      if (Number(info.recType) !== 10005) unavailable("This chart is not a song chart");
+      const tracks = tracksOf(list(data.songInfoList, "chart songs"));
+      if (!tracks.length) unavailable("Chart songs are unavailable");
+      return { id, name: info.title || "", imageUrl: info.headPicUrl || info.frontPicUrl || "", description: info.intro || "", trackCount: Number(info.totalNum) || tracks.length, tracks };
     }
-    if (!/^[1-9]\d*$/.test(id)) unavailable("Invalid playlist ID");
-    const data = await cgi2("/qzone/fcg-bin/fcg_ucc_getcdinfo_byids_cp.fcg", { disstid: id, type: "1", json: "1", utf8: "1", onlysong: "0", new_format: "1" });
-    const info = list(data.cdlist, "playlist details")[0];
-    if (!info) unavailable("Playlist not found");
-    const tracks = tracksOf(list(info.songlist, "playlist songs"));
-    const trackCount = Number(info.total_song_num || info.songnum) || tracks.length;
-    if (!tracks.length && trackCount > 0) unavailable("Playlist songs are unavailable");
-    return { id, name: info.dissname || info.title || "", imageUrl: info.logo || info.picurl || "", description: info.desc || "", owner: info.nickname || info.nick || "", trackCount, tracks };
+    if (!/^[1-9]\d*$/.test(id) || !Number.isSafeInteger(Number(id))) unavailable("Invalid playlist ID");
+    return publicPlaylist(id, { cgi: cgi2, rpc: rpc2, trackOf: trackOf2 });
   }
   async function searchPlaylists({ query: query3, offset = 0 }) {
     query3 = query3.trim();
@@ -15019,10 +15071,7 @@ function createLibrary({ qqAuthRpc: qqAuthRpc2, qqReadSession: qqReadSession2, q
     const s = await account2();
     const entry = (await owned(s)).find((p) => String(p.tid) === String(pid));
     if (!entry) {
-      const body = await cgi2("/qzone/fcg-bin/fcg_ucc_getcdinfo_byids_cp.fcg", { disstid: pid, type: 1, json: 1, utf8: 1, onlysong: 0, new_format: 1 });
-      const info = array(body.cdlist, "playlist")[0];
-      if (!info) throw new Error("QQ Music playlist unavailable");
-      return { ...asPlaylist({ ...info, tid: pid }), tracks: tracks(info.songlist) };
+      return { ...await publicPlaylist(pid, { cgi: cgi2, trackOf: trackOf2, rpc: (module, method, param) => call(s, module, method, param) }), mine: false };
     }
     const euin = await encrypted(s), result = [], seen = /* @__PURE__ */ new Set();
     let first;

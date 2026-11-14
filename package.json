@@ -3,7 +3,7 @@
   "type": "module",
   "scripts": {
     "build": "node build.mjs",
-    "test": "node --test test.mjs stream-fallback.test.mjs auth.test.mjs auth-lifecycle.test.mjs auth-qq.test.mjs auth-wechat.test.mjs qr.test.mjs browse.test.mjs library.test.mjs qrc.test.mjs compat.test.mjs",
+    "test": "node --test test.mjs playlist-fallback.test.mjs stream-fallback.test.mjs auth.test.mjs auth-lifecycle.test.mjs auth-qq.test.mjs auth-wechat.test.mjs qr.test.mjs browse.test.mjs library.test.mjs qrc.test.mjs compat.test.mjs",
     "check": "node --check index.js && node --check dist/index.js",
     "test:live": "node live.mjs",
     "test:signed-in": "node live.mjs --signed-in"
