@@ -15026,10 +15026,11 @@ function createLibrary({ qqAuthRpc: qqAuthRpc2, qqReadSession: qqReadSession2, q
     }
     return result;
   }
-  const tracks = (items) => array(items, "song list").map((item) => {
+  const tracks = (items, skipMissing = false) => array(items, "song list").flatMap((item) => {
     const track = trackOf2(item);
-    if (!track.id) throw new Error("QQ Music missing song MID");
-    return track;
+    if (track.id) return [track];
+    if (skipMissing) return [];
+    throw new Error("QQ Music missing song MID");
   });
   function validName(name) {
     if (typeof name !== "string" || !name.trim() || [...name].length > 20 || /[\u0000-\u001f\u007f-\u009f]/.test(name)) throw new Error("Invalid playlist name");
@@ -15078,15 +15079,15 @@ function createLibrary({ qqAuthRpc: qqAuthRpc2, qqReadSession: qqReadSession2, q
     for (let offset = 0; offset < 1e4; ) {
       const data = checked2(await call(s, "music.srfDissInfo.DissInfo", "CgiGetDiss", { disstid: pid, dirid: 0, tag: true, song_begin: offset, song_num: 100, userinfo: true, orderlist: true, enc_host_uin: euin }));
       first || (first = data);
-      const items = tracks(data.songlist);
-      if (!items.length && hasMore(data)) throw new Error("QQ Music playlist incomplete");
+      if (!Array.isArray(data.songlist)) throw new Error("QQ Music missing song list");
+      const raw = data.songlist, items = tracks(raw, true);
       if (items.length && seen.has(items[0].id)) throw new Error("QQ Music playlist paging repeated");
       if (items.length) seen.add(items[0].id);
       result.push(...items);
       const total = Number(data.total_song_num || 0);
-      if (!hasMore(data) && (total === 0 || result.length >= total)) return { ...ownPlaylist({ ...entry, ...first.dirinfo || {}, tid: pid, total_song_num: first.total_song_num }, s), tracks: result };
-      if (!items.length) throw new Error("QQ Music playlist incomplete");
-      offset += items.length;
+      offset += raw.length;
+      if (!hasMore(data) && (total === 0 || offset >= total)) return { ...ownPlaylist({ ...entry, ...first.dirinfo || {}, tid: pid, total_song_num: first.total_song_num }, s), tracks: result };
+      if (!raw.length) throw new Error("QQ Music playlist incomplete");
     }
     throw new Error("QQ Music playlist incomplete");
   }
