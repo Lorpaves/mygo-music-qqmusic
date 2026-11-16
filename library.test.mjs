@@ -44,6 +44,11 @@ test('liked forwards offset and validates song list', async () => {
   assert.deepEqual(await lib.liked({ offset: 20 }), { tracks: [{ id: 'song1', name: '' }], more: true });
 });
 
+test('liked keeps rejecting songs without a MID', async () => {
+  const { lib } = setup(() => ({ songlist: [{}], hasmore: 0 }));
+  await assert.rejects(lib.liked({}), /missing song MID/);
+});
+
 test('like resolves MID to numeric song ID and confirms state', async () => {
   let liked = false, writes = 0;
   const { lib } = setup((method, p) => {
@@ -78,6 +83,38 @@ test('playlist pages and public response map tracks', async () => {
   });
   assert.deepEqual((await lib.playlist({ id: '900' })).tracks.map(t => t.id), ['song1', 'song2']);
   assert.equal((await lib.playlist({ id: '901' })).name, 'Public');
+});
+
+test('playlist skips unplayable entries while advancing by the raw page size', async () => {
+  const offsets = [];
+  const { lib } = setup((method, p) => {
+    if (method === 'GetPlaylistByUin') return { v_playlist: [own] };
+    assert.equal(method, 'CgiGetDiss');
+    offsets.push(p.song_begin);
+    return p.song_begin === 0
+      ? { dirinfo: { title: 'Mine' }, total_song_num: 4, songlist: [{ mid: 'song1' }, {}, { mid: 'song2' }], hasmore: 1 }
+      : { dirinfo: { title: 'Mine' }, total_song_num: 4, songlist: [{ mid: 'song3' }], hasmore: 0 };
+  });
+  const page = await lib.playlist({ id: '900' });
+  assert.deepEqual(page.tracks.map(t => t.id), ['song1', 'song2', 'song3']);
+  assert.equal(page.trackCount, 4);
+  assert.deepEqual(offsets, [0, 3]);
+});
+
+test('playlist advances through a page containing only unplayable entries', async () => {
+  const offsets = [];
+  const { lib } = setup((method, p) => {
+    if (method === 'GetPlaylistByUin') return { v_playlist: [own] };
+    assert.equal(method, 'CgiGetDiss');
+    offsets.push(p.song_begin);
+    return p.song_begin === 0
+      ? { dirinfo: { title: 'Mine' }, total_song_num: 3, songlist: [{}, {}], hasmore: 1 }
+      : { dirinfo: { title: 'Mine' }, total_song_num: 3, songlist: [{ mid: 'song1' }], hasmore: 0 };
+  });
+  const page = await lib.playlist({ id: '900' });
+  assert.deepEqual(page.tracks.map(t => t.id), ['song1']);
+  assert.equal(page.trackCount, 3);
+  assert.deepEqual(offsets, [0, 2]);
 });
 
 test('rename preserves settings and verifies them', async () => {
