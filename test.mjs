@@ -300,6 +300,54 @@ test('home adds the signed-in recommendation feed', async () => {
   assert.equal(result.sections[0].playlists[0].id, '100');
 });
 
+test('home opens the current daily mix as its first section and preserves playlist recommendations', async () => {
+  storage.set('qqmusic.auth.v1', { musicid: '12345', musickey: 'Q_test', loginType: 2 });
+  const now = Date.now() / 1000;
+  const daily = { type: 500, subtype: 510, jumptype: 10014 };
+  const dailySongs = [song, { ...song, mid: 'anotherMID' }];
+  const cards = [
+    { ...daily, id: '200', time: now - 86400 },
+    { ...daily, id: '201', time: now },
+    { ...daily, id: '202', subtype: 0, title: 'For you' },
+  ];
+  respond = (_url, init) => {
+    const { comm, req_0: req } = JSON.parse(init.body);
+    if (req.method === 'GetRecommendFeed') return response(envelope({ List: [] }));
+    if (req.method === 'GetAll') return response(envelope({ group: [] }));
+    if (req.method === 'get_recommend_feed') return response(envelope({ retcode: 0, v_shelf: [{ v_niche: [{ v_card: cards }] }] }));
+    assert.equal(req.method, 'CgiGetDiss');
+    assert.equal(req.param.disstid, 201);
+    assert.equal(comm.qq, '12345');
+    assert.match(init.headers.Cookie, /qm_keyst=Q_test/);
+    return response(envelope({ code: 0, subcode: 0, songlist: dailySongs, total_song_num: dailySongs.length, hasmore: 0 }));
+  };
+  const result = await plugin.home();
+  assert.equal(result.sections[0].title, 'Daily Recommendations');
+  assert.equal(result.sections[0].pageTitle, 'Daily Recommendations');
+  assert.deepEqual(result.sections[0].tracks.map(track => track.id), [mid, 'anotherMID']);
+  assert.deepEqual(result.sections[1].playlists.map(playlist => playlist.id), ['202']);
+});
+
+test('daily recommendation detail failure leaves the other home sections available', async () => {
+  storage.set('qqmusic.auth.v1', { musicid: '12345', musickey: 'W_test', loginType: 1 });
+  let attempts = 0;
+  respond = (_url, init) => {
+    const req = JSON.parse(init.body).req_0;
+    if (req.method === 'GetRecommendFeed') return response(envelope({ List: [] }));
+    if (req.method === 'GetAll') return response(envelope({ group: [] }));
+    if (req.method === 'get_recommend_feed') return response(envelope({ retcode: 0, v_shelf: [{ v_niche: [{ v_card: [
+      { id: '201', type: 500, subtype: 510, jumptype: 10014, time: Date.now() / 1000 },
+      { id: '202', type: 500, subtype: 0, jumptype: 10014, title: 'For you' },
+    ] }] }] }));
+    assert.equal(req.method, 'CgiGetDiss');
+    attempts++;
+    return response(envelope({ songlist: [song], total_song_num: 30, hasmore: 1 }));
+  };
+  const result = await plugin.home();
+  assert.equal(attempts, 3);
+  assert.deepEqual(result.sections.map(section => section.title), ['Recommended for You', 'Featured Playlists', 'Charts']);
+});
+
 test('lyrics surfaces HTTP errors', async () => {
   respond = () => response({ message: 'unavailable' }, 503);
   await assert.rejects(() => plugin.lyrics({ id: mid }));
